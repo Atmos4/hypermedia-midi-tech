@@ -25,13 +25,14 @@ struct Order {
 
 // Rules duplicated from the server. These go stale when the server changes.
 fn menu(order: &Order) -> Vec<(&'static str, &'static str)> {
-    match order.status.as_str() {
-        "draft" => vec![
+    match (order.status.as_str(), order.total.contains("100")) {
+        ("draft", true) => vec![
             ("pay", "Pay"),
             ("coupon", "Apply 10% coupon"),
             ("cancel", "Cancel"),
         ],
-        "paid" => vec![("cancel", "Cancel"), ("ship", "Ship")],
+        ("draft", false) => vec![("pay", "Pay"), ("cancel", "Cancel")],
+        ("paid", _) => vec![("cancel", "Cancel"), ("ship", "Ship")],
         _ => vec![],
     }
 }
