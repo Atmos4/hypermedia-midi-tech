@@ -45,7 +45,6 @@ enum Message {
     Loaded(Result<Order, String>),
     Act(&'static str),
     Acted(Result<Order, String>),
-    Refresh,
     Reset,
     ResetDone(Result<(), String>),
     Tick,
@@ -116,10 +115,6 @@ impl App {
                 self.error = Some(e);
                 Task::perform(fetch_order(), Message::Loaded)
             }
-            Message::Refresh => {
-                self.error = None;
-                Task::perform(fetch_order(), Message::Loaded)
-            }
             Message::Tick => Task::perform(fetch_order(), Message::Polled),
             Message::Polled(Ok(latest)) => {
                 self.order = Some(latest);
@@ -144,11 +139,7 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         // demo toolbar
-        let toolbar = Row::new()
-            .spacing(8)
-            .push(button("Refresh").on_press(Message::Refresh))
-            .push(button("Reset").on_press(Message::Reset));
-        let mut col = Column::new().spacing(14).push(toolbar);
+        let mut col = Column::new().spacing(14);
 
         match &self.order {
             None => col = col.push(text("Loading...").size(22)),

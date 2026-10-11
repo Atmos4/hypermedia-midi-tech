@@ -30,7 +30,6 @@ enum Message {
     Loaded(Result<Value, String>),
     Follow(Control),
     Followed(Result<Value, String>),
-    Refresh,
     Reset,
     ResetDone(Result<(), String>),
     Tick,
@@ -109,10 +108,6 @@ impl App {
                 self.error = Some(e);
                 Task::perform(load(self.this.clone()), Message::Loaded)
             }
-            Message::Refresh => {
-                self.error = None;
-                Task::perform(load(self.this.clone()), Message::Loaded)
-            }
             Message::Tick => Task::perform(load(self.this.clone()), Message::Polled),
             Message::Polled(Ok(latest)) => {
                 self.resource = Some(latest);
@@ -137,11 +132,7 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         // demo toolbar
-        let toolbar = Row::new()
-            .spacing(8)
-            .push(button("Refresh").on_press(Message::Refresh))
-            .push(button("Reset").on_press(Message::Reset));
-        let mut col = Column::new().spacing(10).push(toolbar);
+        let mut col = Column::new().spacing(10);
 
         match &self.resource {
             None => col = col.push(text("Loading...").size(22)),

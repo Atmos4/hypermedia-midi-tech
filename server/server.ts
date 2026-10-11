@@ -134,9 +134,6 @@ const page = (o: Order) => `<!doctype html>
 <title>Order ${o.id}</title>
 <style>body{font-family:system-ui;margin:2rem}button{margin-right:.5rem;padding:.4rem .8rem}</style>
 <script src="https://unpkg.com/htmx.org@2"></script>
-<div style="margin-bottom:1.5rem">
-  <button hx-post="/reset" hx-target="#order" hx-swap="outerHTML">Reset</button>
-</div>
 ${fragment(o)}`;
 
 const html = (body: string) =>
