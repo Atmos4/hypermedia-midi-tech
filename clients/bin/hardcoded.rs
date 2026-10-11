@@ -1,7 +1,8 @@
 // CLIENT A (desktop): the traditional heavy client. Business rules and URLs live in here.
 // Usage: cargo run --release --bin hardcoded
-use iced::time;
+use iced::keyboard::Modifiers;
 use iced::widget::{button, container, text, Column, Row};
+use iced::{event, keyboard, time, Event};
 use iced::{Element, Subscription, Task};
 use reqwest::header::ACCEPT;
 use serde::Deserialize;
@@ -71,7 +72,27 @@ impl App {
 
     // Poll the server once a second, so the window follows server changes by itself
     fn subscription(&self) -> Subscription<Message> {
-        time::every(time::milliseconds(1000)).map(|_| Message::Tick)
+        Subscription::batch(vec![
+            time::every(time::milliseconds(1000)).map(|_| Message::Tick),
+            event::listen_with(|event, _status, _window_id| {
+                match event {
+                    // Match whenever a key is pressed down
+                    Event::Keyboard(keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Character(c),
+                        modifiers,
+                        ..
+                    }) => {
+                        // Check if Ctrl + Shift are both held down
+                        if c.as_str() == "z" && modifiers.contains(Modifiers::CTRL) {
+                            Some(Message::Reset)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }),
+        ])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
