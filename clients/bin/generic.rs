@@ -104,10 +104,17 @@ impl App {
         match &self.resource {
             None => col = col.push(text("Loading...").size(22)),
             Some(Value::Object(props)) => {
-                // data = everything except the controls
-                for (k, v) in props.iter().filter(|(k, _)| k.as_str() != "actions") {
-                    col = col.push(text(format!("{k}: {}", show(v))).size(24));
+                // Conventions of our little format: "title" is the heading,
+                // "id" is identity (not displayed), "actions" are the controls.
+                if let Some(title) = props.get("title") {
+                    col = col.push(text(show(title)).size(32));
                 }
+                let facts: Vec<String> = props
+                    .iter()
+                    .filter(|(k, _)| !matches!(k.as_str(), "id" | "title" | "actions"))
+                    .map(|(k, v)| format!("{}: {}", label(k), show(v)))
+                    .collect();
+                col = col.push(text(facts.join("    ")).size(22));
 
                 // one button per control, whatever it is
                 let actions = props
@@ -139,8 +146,17 @@ impl App {
     }
 }
 
+fn label(key: &str) -> String {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 fn show(v: &Value) -> String {
     match v {
+        Value::Null => "-".to_string(),
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }

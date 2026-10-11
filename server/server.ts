@@ -101,8 +101,9 @@ const transitions: Record<ActionName, (o: Order) => void> = {
 
 const asJson = (o: Order) => ({
   id: o.id,
+  title: `Order #${o.id}`,
   status: o.status,
-  total: o.total,
+  total: `$${o.total}`,
   actions: actions(o), // the hypermedia controls
 });
 

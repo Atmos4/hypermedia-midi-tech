@@ -20,7 +20,7 @@ fn main() -> iced::Result {
 struct Order {
     id: u32,
     status: String,
-    total: f64,
+    total: String,
 }
 
 // Rules duplicated from the server. These go stale when the server changes.
@@ -113,7 +113,7 @@ impl App {
                 col = col.push(text(format!("Order #{}", order.id)).size(32));
                 col = col.push(
                     text(format!(
-                        "Status: {}    Total: ${:.2}",
+                        "Status: {}    Total: {}",
                         order.status, order.total
                     ))
                     .size(22),
