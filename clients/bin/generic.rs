@@ -1,7 +1,8 @@
 // CLIENT B (desktop): a generic hypermedia client. It knows nothing about orders or tickets.
 // Usage: cargo run --release --bin generic [-- /tickets/1]
+use iced::time;
 use iced::widget::{button, container, text, Column, Row};
-use iced::{Element, Task};
+use iced::{Element, Subscription, Task};
 use reqwest::{header::ACCEPT, Method, Url};
 use serde_json::Value;
 
@@ -11,6 +12,7 @@ fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .title("Client B: generic hypermedia client")
         .window_size((560.0, 340.0))
+        .subscription(App::subscription)
         .run()
 }
 
@@ -30,12 +32,15 @@ enum Message {
     Refresh,
     Reset,
     ResetDone(Result<(), String>),
+    Tick,
+    Polled(Result<Value, String>),
 }
 
 struct App {
     this: Url,
     resource: Option<Value>,
     error: Option<String>,
+    offline: bool,
 }
 
 impl App {
@@ -50,9 +55,15 @@ impl App {
                 this,
                 resource: None,
                 error: None,
+                offline: false,
             },
             task,
         )
+    }
+
+    // Poll the server once a second, so the window follows server changes by itself
+    fn subscription(&self) -> Subscription<Message> {
+        time::every(time::milliseconds(1000)).map(|_| Message::Tick)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -80,6 +91,16 @@ impl App {
             Message::Refresh => {
                 self.error = None;
                 Task::perform(load(self.this.clone()), Message::Loaded)
+            }
+            Message::Tick => Task::perform(load(self.this.clone()), Message::Polled),
+            Message::Polled(Ok(latest)) => {
+                self.resource = Some(latest);
+                self.offline = false;
+                Task::none()
+            }
+            Message::Polled(Err(_)) => {
+                self.offline = true;
+                Task::none()
             }
             Message::Reset => Task::perform(reset(), Message::ResetDone),
             Message::ResetDone(Ok(())) => {
@@ -136,6 +157,14 @@ impl App {
                 col = col.push(buttons);
             }
             Some(_) => col = col.push(text("Unexpected response").size(22)),
+        }
+
+        if self.offline {
+            col = col.push(
+                text("Server unreachable, retrying...")
+                    .size(20)
+                    .color([0.8, 0.5, 0.0]),
+            );
         }
 
         if let Some(error) = &self.error {

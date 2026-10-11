@@ -1,7 +1,8 @@
 // CLIENT A (desktop): the traditional heavy client. Business rules and URLs live in here.
 // Usage: cargo run --release --bin hardcoded
+use iced::time;
 use iced::widget::{button, container, text, Column, Row};
-use iced::{Element, Task};
+use iced::{Element, Subscription, Task};
 use reqwest::header::ACCEPT;
 use serde::Deserialize;
 use serde_json::Value;
@@ -13,6 +14,7 @@ fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .title("Client A: hardcoded")
         .window_size((560.0, 340.0))
+        .subscription(App::subscription)
         .run()
 }
 
@@ -45,11 +47,14 @@ enum Message {
     Refresh,
     Reset,
     ResetDone(Result<(), String>),
+    Tick,
+    Polled(Result<Order, String>),
 }
 
 struct App {
     order: Option<Order>,
     error: Option<String>,
+    offline: bool,
 }
 
 impl App {
@@ -58,9 +63,15 @@ impl App {
             Self {
                 order: None,
                 error: None,
+                offline: false,
             },
             Task::perform(fetch_order(), Message::Loaded),
         )
+    }
+
+    // Poll the server once a second, so the window follows server changes by itself
+    fn subscription(&self) -> Subscription<Message> {
+        time::every(time::milliseconds(1000)).map(|_| Message::Tick)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -87,6 +98,16 @@ impl App {
             Message::Refresh => {
                 self.error = None;
                 Task::perform(fetch_order(), Message::Loaded)
+            }
+            Message::Tick => Task::perform(fetch_order(), Message::Polled),
+            Message::Polled(Ok(latest)) => {
+                self.order = Some(latest);
+                self.offline = false;
+                Task::none()
+            }
+            Message::Polled(Err(_)) => {
+                self.offline = true;
+                Task::none()
             }
             Message::Reset => Task::perform(reset(), Message::ResetDone),
             Message::ResetDone(Ok(())) => {
@@ -125,6 +146,14 @@ impl App {
                 }
                 col = col.push(buttons);
             }
+        }
+
+        if self.offline {
+            col = col.push(
+                text("Server unreachable, retrying...")
+                    .size(20)
+                    .color([0.8, 0.5, 0.0]),
+            );
         }
 
         if let Some(error) = &self.error {

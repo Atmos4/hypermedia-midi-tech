@@ -30,7 +30,14 @@ const defaultOrder: Order = { id: 1, status: "draft", total: 100, coupon: false 
 const seedOrders = (): Record<number, Order> => ({
   1: defaultOrder,
 });
-const orders = (g.orders ??= seedOrders());
+
+function resetOrder(o: Order) {
+  o.id = 1;
+  o.status = "draft";
+  o.total = 100;
+  o.coupon = false;
+}
+
 
 // ---- A second resource: proves the generic client is resource-agnostic ----
 
@@ -45,13 +52,13 @@ interface Ticket {
 const seedTickets = (): Record<number, Ticket> => ({
   1: { id: 1, title: "Printer is on fire", state: "open", assignee: null },
 });
-const tickets = (g.tickets ??= seedTickets());
+
+let orders = (g.orders ??= seedOrders());
+let tickets = (g.tickets ??= seedTickets());
 
 // Demo helper (not part of the hypermedia API): back to the initial state
 function reset() {
-  for (const k of Object.keys(orders)) delete orders[Number(k)];
   Object.assign(orders, seedOrders());
-  for (const k of Object.keys(tickets)) delete tickets[Number(k)];
   Object.assign(tickets, seedTickets());
 }
 
@@ -107,21 +114,27 @@ const asJson = (o: Order) => ({
   actions: actions(o), // the hypermedia controls
 });
 
-const fragment = (o: Order) => `
-<div id="order">
+const inner = (o: Order) => `
   <h2>Order #${o.id}</h2>
   <p>Status: <b>${o.status}</b> | Total: $${o.total.toFixed(2)}</p>
   ${actions(o)
     .map((a) => `<button hx-post="${a.href}" hx-target="#order" hx-swap="outerHTML">${a.title}</button>`)
     .join("\n  ")}
-</div>`;
+`;
+
+// Changes whenever what the user sees changes: the state OR the rules
+const version = (o: Order) => Bun.hash(inner(o)).toString(36);
+
+// The fragment polls itself every second. Sending ?v= lets the server answer
+// 204 (no change) so htmx leaves the page, and any click in progress, alone.
+const fragment = (o: Order) =>
+  `<div id="order" hx-get="/orders/${o.id}?v=${version(o)}" hx-trigger="every 1s" hx-swap="outerHTML">${inner(o)}</div>`;
 
 const page = (o: Order) => `<!doctype html>
 <title>Order ${o.id}</title>
 <style>body{font-family:system-ui;margin:2rem}button{margin-right:.5rem;padding:.4rem .8rem}</style>
 <script src="https://unpkg.com/htmx.org@2"></script>
 <div style="margin-bottom:1.5rem">
-  <button hx-get="/orders/${o.id}" hx-target="#order" hx-swap="outerHTML">Refresh</button>
   <button hx-post="/reset" hx-target="#order" hx-swap="outerHTML">Reset</button>
 </div>
 ${fragment(o)}`;
@@ -147,9 +160,12 @@ Bun.serve({
     // Demo helper, not part of the hypermedia API
     "/reset": {
       POST: (req) => {
-        reset();
+        if (!orders[1]) {
+          return new Response("Not found", { status: 404 });
+        }
+        resetOrder(orders[1]);
         return req.headers.has("hx-request")
-          ? html(fragment(orders[1] ?? defaultOrder))
+          ? html(fragment(orders[1]))
           : new Response(null, { status: 204 });
       },
     },
@@ -182,7 +198,13 @@ Bun.serve({
     "/orders/:id": {
       GET: (req) => {
         const o = orders[Number(req.params.id)];
-        return o ? respond(req, o) : new Response("Not found", { status: 404 });
+        if (!o) return new Response("Not found", { status: 404 });
+        // htmx polling: the page already has this version, nothing to swap
+        const seen = new URL(req.url).searchParams.get("v");
+        if (req.headers.has("hx-request") && seen === version(o)) {
+          return new Response(null, { status: 204 });
+        }
+        return respond(req, o);
       },
     },
 
