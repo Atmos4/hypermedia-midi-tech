@@ -1,23 +1,26 @@
-// CLIENT B (desktop): a generic hypermedia client. It knows nothing about orders or tickets.
+// CLIENT B (desktop): a generic hypermedia client. It knows nothing about orders.
+// It knows ONE url (the entry point) and discovers everything else by following links.
 // Usage: cargo run --release --bin generic [-- /tickets/1]
-use iced::keyboard::Modifiers;
+use iced::time;
 use iced::widget::{button, container, text, Column, Row};
-use iced::{event, keyboard, time, Event};
 use iced::{Element, Subscription, Task};
 use reqwest::{header::ACCEPT, Method, Url};
 use serde_json::Value;
 
 const API: &str = "http://localhost:3000";
 
+// Where we really ended up (after redirects) and what we found there
+type Fetched = Result<(Url, Value), String>;
+
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .title("Client B: generic hypermedia client")
-        .window_size((560.0, 340.0))
+        .window_size((640.0, 360.0))
         .subscription(App::subscription)
         .run()
 }
 
-// A hypermedia control: all the client needs to know to follow it
+// An action: changes something (like an HTML form)
 #[derive(Debug, Clone)]
 struct Control {
     title: String,
@@ -27,17 +30,17 @@ struct Control {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Loaded(Result<Value, String>),
+    Loaded(Fetched),
+    Navigate(String),
+    Navigated(Fetched),
     Follow(Control),
     Followed(Result<Value, String>),
-    Reset,
-    ResetDone(Result<(), String>),
     Tick,
-    Polled(Result<Value, String>),
+    Polled((Url, Fetched)),
 }
 
 struct App {
-    this: Url,
+    this: Url, // where we are right now
     resource: Option<Value>,
     error: Option<String>,
     offline: bool,
@@ -45,9 +48,7 @@ struct App {
 
 impl App {
     fn new() -> (Self, Task<Message>) {
-        let path = std::env::args()
-            .nth(1)
-            .unwrap_or_else(|| "/orders/1".into());
+        let path = std::env::args().nth(1).unwrap_or_else(|| "/".into());
         let this = Url::parse(API).unwrap().join(&path).expect("invalid path");
         let task = Task::perform(load(this.clone()), Message::Loaded);
         (
@@ -63,36 +64,35 @@ impl App {
 
     // Poll the server once a second, so the window follows server changes by itself
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch(vec![
-            time::every(time::milliseconds(1000)).map(|_| Message::Tick),
-            event::listen_with(|event, _status, _window_id| {
-                match event {
-                    // Match whenever a key is pressed down
-                    Event::Keyboard(keyboard::Event::KeyPressed {
-                        key: keyboard::Key::Character(c),
-                        modifiers,
-                        ..
-                    }) => {
-                        // Check if Ctrl + Shift are both held down
-                        if c.as_str() == "z" && modifiers.contains(Modifiers::CTRL) {
-                            Some(Message::Reset)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            }),
-        ])
+        time::every(time::milliseconds(1000)).map(|_| Message::Tick)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Loaded(Ok(resource)) => {
+            Message::Loaded(Ok((url, resource))) => {
+                self.this = url;
                 self.resource = Some(resource);
                 Task::none()
             }
             Message::Loaded(Err(e)) => {
+                self.error = Some(e);
+                Task::none()
+            }
+            // Follow a link: just a GET on whatever href the server gave us
+            Message::Navigate(href) => match self.this.join(&href) {
+                Ok(url) => Task::perform(load(url), Message::Navigated),
+                Err(e) => {
+                    self.error = Some(e.to_string());
+                    Task::none()
+                }
+            },
+            Message::Navigated(Ok((url, resource))) => {
+                self.this = url;
+                self.resource = Some(resource);
+                self.error = None;
+                Task::none()
+            }
+            Message::Navigated(Err(e)) => {
                 self.error = Some(e);
                 Task::none()
             }
@@ -108,68 +108,95 @@ impl App {
                 self.error = Some(e);
                 Task::perform(load(self.this.clone()), Message::Loaded)
             }
-            Message::Tick => Task::perform(load(self.this.clone()), Message::Polled),
-            Message::Polled(Ok(latest)) => {
-                self.resource = Some(latest);
+            Message::Tick => Task::perform(load_at(self.this.clone()), Message::Polled),
+            Message::Polled((requested, Ok((url, latest)))) => {
                 self.offline = false;
+                if requested == self.this {
+                    self.this = url;
+                    self.resource = Some(latest); // ignore answers for a page we already left
+                }
                 Task::none()
             }
-            Message::Polled(Err(_)) => {
+            Message::Polled((_, Err(_))) => {
                 self.offline = true;
-                Task::none()
-            }
-            Message::Reset => Task::perform(reset(), Message::ResetDone),
-            Message::ResetDone(Ok(())) => {
-                self.error = None;
-                Task::perform(load(self.this.clone()), Message::Loaded)
-            }
-            Message::ResetDone(Err(e)) => {
-                self.error = Some(e);
                 Task::none()
             }
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
-        // demo toolbar
-        let mut col = Column::new().spacing(10);
+        let mut nav = Row::new().spacing(8);
+        let mut body = Column::new().spacing(12);
 
         match &self.resource {
-            None => col = col.push(text("Loading...").size(22)),
+            None => body = body.push(text("Loading...").size(22)),
             Some(Value::Object(props)) => {
-                // Conventions of our little format: "title" is the heading,
-                // "id" is identity (not displayed), "actions" are the controls.
+                // Conventions of our little format: "title" is the heading, "id" is identity
+                // (not displayed), "links" are the navigation bar (GET), "actions" change
+                // state (POST).
+
+                // one button per link: we never build a URL ourselves, we follow what we are given
+                let links = props
+                    .get("links")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                for l in links {
+                    let title = l["title"].as_str().unwrap_or("?").to_string();
+                    let href = l["href"].as_str().unwrap_or("").to_string();
+                    let here = self
+                        .this
+                        .join(&href)
+                        .map(|u| u == self.this)
+                        .unwrap_or(false);
+                    let link = button(text(title));
+                    // the page we are on has no action: its button looks disabled
+                    nav = nav.push(if here {
+                        link
+                    } else {
+                        link.on_press(Message::Navigate(href))
+                    });
+                }
+
                 if let Some(title) = props.get("title") {
-                    col = col.push(text(show(title)).size(32));
+                    body = body.push(text(show(title)).size(32));
                 }
                 let facts: Vec<String> = props
                     .iter()
-                    .filter(|(k, _)| !matches!(k.as_str(), "id" | "title" | "actions"))
+                    .filter(|(k, _)| !matches!(k.as_str(), "id" | "title" | "links" | "actions"))
                     .map(|(k, v)| format!("{}: {}", label(k), show(v)))
                     .collect();
-                col = col.push(text(facts.join("    ")).size(22));
+                if !facts.is_empty() {
+                    body = body.push(text(facts.join("    ")).size(22));
+                }
 
-                // one button per control, whatever it is
+                // one button per action, whatever it is
                 let actions = props
                     .get("actions")
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                let mut buttons = Row::new().spacing(8);
-                for a in actions {
-                    let control = Control {
-                        title: a["title"].as_str().unwrap_or("?").to_string(),
-                        method: a["method"].as_str().unwrap_or("POST").to_string(),
-                        href: a["href"].as_str().unwrap_or("").to_string(),
-                    };
-                    buttons = buttons.push(
-                        button(text(control.title.clone())).on_press(Message::Follow(control)),
-                    );
+                if !actions.is_empty() {
+                    let mut buttons = Row::new().spacing(8);
+                    for a in actions {
+                        let control = Control {
+                            title: a["title"].as_str().unwrap_or("?").to_string(),
+                            method: a["method"].as_str().unwrap_or("POST").to_string(),
+                            href: a["href"].as_str().unwrap_or("").to_string(),
+                        };
+                        buttons = buttons.push(
+                            button(text(control.title.clone())).on_press(Message::Follow(control)),
+                        );
+                    }
+                    body = body.push(buttons);
                 }
-                col = col.push(buttons);
             }
-            Some(_) => col = col.push(text("Unexpected response").size(22)),
+            Some(_) => body = body.push(text("Unexpected response").size(22)),
         }
+
+        // persistent navigation on top, then the page
+        let top = Row::new().spacing(24).push(nav);
+        let mut col = Column::new().spacing(20).push(top).push(body);
 
         if self.offline {
             col = col.push(
@@ -203,26 +230,24 @@ fn show(v: &Value) -> String {
     }
 }
 
-// Demo helper, not part of the hypermedia API: put the server back to its initial state
-async fn reset() -> Result<(), String> {
-    reqwest::Client::new()
-        .post(format!("{API}/reset"))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn load(url: Url) -> Result<Value, String> {
+async fn load(url: Url) -> Fetched {
     let res = reqwest::Client::new()
         .get(url)
         .header(ACCEPT, "application/json")
         .send()
         .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
         .map_err(|e| e.to_string())?;
-    res.json().await.map_err(|e| e.to_string())
+    let final_url = res.url().clone(); // the entry point redirects: remember where we landed
+    let body = res.json().await.map_err(|e| e.to_string())?;
+    Ok((final_url, body))
+}
+
+// Same as load, but remembers which page the answer is for
+async fn load_at(url: Url) -> (Url, Fetched) {
+    let result = load(url.clone()).await;
+    (url, result)
 }
 
 async fn follow(base: Url, control: Control) -> Result<Value, String> {
