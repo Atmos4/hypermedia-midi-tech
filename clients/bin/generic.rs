@@ -2,7 +2,7 @@
 // It knows ONE url (the entry point) and discovers everything else by following links.
 // Usage: cargo run --release --bin generic [-- /tickets/1]
 use iced::time;
-use iced::widget::{button, container, text, Column, Row};
+use iced::widget::{button, container, rule, text, Column, Row};
 use iced::{Element, Subscription, Task};
 use reqwest::{header::ACCEPT, Method, Url};
 use serde_json::Value;
@@ -190,13 +190,14 @@ impl App {
                     }
                     body = body.push(buttons);
                 }
+                body = body.push(rule::horizontal(2));
+                body = body.push(nav);
             }
             Some(_) => body = body.push(text("Unexpected response").size(22)),
         }
 
         // persistent navigation on top, then the page
-        let top = Row::new().spacing(24).push(nav);
-        let mut col = Column::new().spacing(20).push(top).push(body);
+        let mut col = Column::new().spacing(20).push(body);
 
         if self.offline {
             col = col.push(

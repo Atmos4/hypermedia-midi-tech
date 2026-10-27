@@ -2,8 +2,6 @@
 // Run:  bun --hot server.ts
 // --hot reloads this file in place, and the state survives reloads.
 
-// ---- Types ----------------------------------------------------
-
 type Status = "draft" | "paid" | "shipped" | "cancelled";
 type ActionName = "pay" | "coupon" | "cancel" | "ship" | "reorder";
 
@@ -15,7 +13,47 @@ interface Order {
   coupon: boolean;
 }
 
-// An action changes something (like an HTML form): POST
+interface Link {
+  title: string;
+  href: string;
+}
+
+type ActionItem = {
+  name: ActionName;
+  title: string;
+  enabled: boolean;
+}
+
+function action_list(o: Order): ActionItem[] {
+  return [{
+    name: "pay", title: "Pay",
+    enabled: o.status === "draft"
+  }, {
+    name: "coupon", title: "Apply 10% coupon",
+    enabled: o.status === "draft" && !o.coupon
+  }, {
+    name: "ship", title: "Ship",
+    enabled: o.status === "paid"
+  }, {
+    name: "cancel", title: "Cancel",
+    enabled: o.status === "draft"
+  }, {
+    name: "reorder", title: "Re-order",
+    enabled: o.status === "shipped" || o.status === "cancelled"
+  }];
+}
+
+function link_list(orders: Record<number, Order>): Link[] {
+  let list = Object.values(orders).map((o) => ({
+    title: `Order #${o.id}`,
+    href: `/orders/${o.id}`,
+  }));
+
+  list.push({ title: "Tickets", href: "/tickets" })
+
+  return list;
+}
+
 interface Action<N extends string = ActionName> {
   name: N;
   title: string;
@@ -23,15 +61,7 @@ interface Action<N extends string = ActionName> {
   href: string;
 }
 
-// A link goes somewhere (like an HTML <a>): GET
-interface Link {
-  rel: string;
-  title: string;
-  href: string;
-}
-
 // ---- State (kept on globalThis so --hot reloads don't reset it) --
-
 const g = globalThis as typeof globalThis & {
   orders?: Record<number, Order>;
   tickets?: Record<number, Ticket>;
@@ -43,8 +73,6 @@ const seedOrders = (): Record<number, Order> => ({
 });
 const orders = (g.orders ??= seedOrders());
 
-// ---- A second resource: proves the generic client is resource-agnostic ----
-
 type TicketAction = "assign" | "close" | "reopen";
 interface Ticket {
   id: number;
@@ -55,10 +83,11 @@ interface Ticket {
 
 const seedTickets = (): Record<number, Ticket> => ({
   1: { id: 1, title: "Printer is on fire", state: "open", assignee: null },
+  2: { id: 2, title: "Water leakage", state: "open", assignee: null },
+  3: { id: 3, title: "Server is down", state: "open", assignee: null },
 });
 const tickets = (g.tickets ??= seedTickets());
 
-// Demo helper (not part of the hypermedia API): back to the initial state
 function reset() {
   for (const k of Object.keys(orders)) delete orders[Number(k)];
   Object.assign(orders, seedOrders());
@@ -80,27 +109,10 @@ const ticketTransitions: Record<TicketAction, (t: Ticket) => void> = {
   reopen: (t) => { t.state = "open"; t.assignee = null; },
 };
 
-// ---------------------------------------------------------------
-// THE DEMO MOMENT: all business rules about "what can I do now?"
-// live here. Edit this function and save: every client updates
-// without being touched.
-// ---------------------------------------------------------------
 function actions(o: Order): Action[] {
-  const a: { name: ActionName; title: string }[] = [];
-  if (o.status === "draft") {
-    a.push({ name: "pay", title: "Pay" });
-    if (!o.coupon) a.push({ name: "coupon", title: "Apply 10% coupon" });
-  }
-  // Try changing this live: remove "paid" so paid orders can't be cancelled
-  if (o.status === "draft" || o.status === "paid") {
-    a.push({ name: "cancel", title: "Cancel" });
-  }
-  if (o.status === "paid") a.push({ name: "ship", title: "Ship" });
-  if (o.status === "shipped" || o.status === "cancelled") {
-    a.push({ name: "reorder", title: "Re-order" });
-  }
-
-  return a.map((x) => ({ ...x, method: "POST", href: `/orders/${o.id}/${x.name}` }));
+  return action_list(o)
+    .filter(x => x.enabled)
+    .map((x) => ({ ...x, method: "POST", href: `/orders/${o.id}/${x.name}` }));
 }
 
 // State transitions, keyed by action name (the compiler checks every action has one)
@@ -113,23 +125,22 @@ const transitions: Record<ActionName, (o: Order) => void> = {
   reorder: (o) => { o.status = "draft"; o.coupon = false; o.total = o.baseTotal; },
 };
 
-// ---- Links: where can I go from here? --------------------------
-// Clients never build these URLs themselves, they follow what they are given.
-
-// The navigation bar: every order carries links to all orders, clients just draw them
+const ticketLinks = (): Link[] => [{ title: "All tickets", href: "/tickets" }];
 const orderLinks = (): Link[] =>
   Object.values(orders).map((o) => ({
-    rel: "item",
     title: `Order #${o.id}`,
     href: `/orders/${o.id}`,
   }));
-const ticketLinks = (): Link[] => [{ rel: "collection", title: "All tickets", href: "/tickets" }];
-const ticketListLinks = (): Link[] =>
-  Object.values(tickets).map((t) => ({
-    rel: "item",
+
+
+const ticketListLinks = (): Link[] => {
+  let list = Object.values(tickets).map((t) => ({
     title: `${t.title} · ${t.state}`,
     href: `/tickets/${t.id}`,
   }));
+  list.push({ title: "Back to orders", href: "/orders/1" });
+  return list;
+}
 
 // ---- JSON representations -------------------------------------
 
@@ -138,19 +149,24 @@ const orderJson = (o: Order) => ({
   title: `Order #${o.id}`,
   status: o.status,
   total: `$${o.total}`,
-  links: orderLinks(),
+  links: link_list(orders),
   actions: actions(o), // the hypermedia controls
 });
+const orderSimpleJson = (o: Order) => ({
+  id: o.id,
+  title: `Order #${o.id}`,
+  status: o.status,
+  total: `$${o.total}`,
+})
 const ticketJson = (t: Ticket) => ({ ...t, links: ticketLinks(), actions: ticketActions(t) });
 
 // ---- HTML (htmx) representations ------------------------------
-// The same links, rendered as plain <a> tags.
 
 const hash = (s: string) => Bun.hash(s).toString(36);
 
 const orderInner = (o: Order) => `
   <h2>Order #${o.id}</h2>
-  <p>Status: <b>${o.status}</b> | Total: $${o.total.toFixed(2)}</p>
+  <p>Status: <span style="word-spacing:1.5rem">${o.status} </span> Total: $${o.total.toFixed(2)}</p>
   ${actions(o)
     .map((a) => `<button hx-post="${a.href}" hx-target="#view" hx-swap="outerHTML">${a.title}</button>`)
     .join("\n  ")}
@@ -165,19 +181,21 @@ const pollWrap = (path: string, inner: string) =>
 const shell = (title: string, path: string, view: string) => `<!doctype html>
 <title>${title}</title>
 <style>
-  body{font-family:system-ui;background-color:#2b2d31;color:white;margin:2rem}
+  html{font-family:system-ui;background-color:#2b2d31;color:white;margin:.5rem;font-size:1.3em}
+  h2{font-weight:400}
   header{display:flex;gap:2rem;align-items:center;margin-bottom:1.5rem}
-  nav a,nav span{margin-right:.5rem;color:white;background-color:#5865f2;padding:.4rem .6rem;text-decoration:none}
+  nav a,nav span{font-size:.9rem;margin-right:.5rem;color:white;background-color:#5865f2;padding:.4rem .6rem;text-decoration:none}
   nav span{opacity:.7}
-  button{color:white;background-color:#5865f2;margin-right:.5rem;padding:.4rem .6rem;border:none}
+  button{font-size:.9rem;color:white;background-color:#5865f2;margin-right:.5rem;padding:.4rem .6rem;border:none}
+  hr{margin-top:.5rem;margin-bottom:1rem;opacity:.3}
 </style>
 <script src="https://unpkg.com/htmx.org@2"></script>
-<header>
-  <nav>${orderLinks()
+${view}
+<hr>
+<nav>${orderLinks()
     .map((l) => (l.href === path ? `<span>${l.title}</span>` : `<a href="${l.href}">${l.title}</a>`))
     .join("")}</nav>
-</header>
-${view}`;
+`;
 
 const html = (body: string) =>
   new Response(body, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -251,6 +269,13 @@ Bun.serve({
     "/api/orders": {
       GET: () =>
         Response.json(Object.values(orders).map(({ id, status, total }) => ({ id, status, total: `$${total}` }))),
+    },
+
+    "/api/orders/:id": {
+      GET: (req) => {
+        const o = orders[Number(req.params.id)];
+        return o ? Response.json(orderSimpleJson(o)) : new Response("Not found", { status: 404 });
+      },
     },
 
     "/orders/:id": {

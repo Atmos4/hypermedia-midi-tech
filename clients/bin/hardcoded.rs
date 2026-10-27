@@ -2,7 +2,7 @@
 // the shape of every response all live in here.
 // Usage: cargo run --release --bin hardcoded
 use iced::time;
-use iced::widget::{button, container, text, Column, Row};
+use iced::widget::{button, container, rule, text, Column, Row};
 use iced::{Element, Subscription, Task};
 use reqwest::header::ACCEPT;
 use serde::Deserialize;
@@ -34,7 +34,7 @@ fn menu(order: &Order) -> Vec<(&'static str, &'static str)> {
             ("cancel", "Cancel"),
         ],
         ("draft", false) => vec![("pay", "Pay"), ("cancel", "Cancel")],
-        ("paid", _) => vec![("cancel", "Cancel"), ("ship", "Ship")],
+        ("paid", _) => vec![("ship", "Ship"), ("cancel", "Cancel")],
         ("shipped", _) => vec![("reorder", "Re-order")],
         ("cancelled", _) => vec![("reorder", "Re-order")],
         _ => vec![],
@@ -169,12 +169,13 @@ impl App {
                     buttons = buttons.push(button(title).on_press(Message::Act(name)));
                 }
                 body = body.push(buttons);
+                body = body.push(rule::horizontal(2));
+                body = body.push(nav);
             }
         }
 
         // persistent navigation on top, then the page
-        let top = Row::new().spacing(24).push(nav);
-        let mut col = Column::new().spacing(20).push(top).push(body);
+        let mut col = Column::new().spacing(20).push(body);
 
         if self.offline {
             col = col.push(

@@ -7,8 +7,6 @@ edition = "2021"
 
 [dependencies]
 iced = { version = "0.14", features = ["tokio"] }
-# No TLS needed: the demo server is plain http on localhost.
-# "blocking" is only used by the terminal fallbacks (*_cli).
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order keeps properties in the order the server sent them

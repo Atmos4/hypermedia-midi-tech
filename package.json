@@ -5,9 +5,9 @@
   "scripts": {
     "build": "slidev build",
     "dev": "slidev --open",
-    "fr": "slidev slides.fr.md --open",
     "export": "slidev export",
-    "typecheck": "bun check"
+    "typecheck": "bun check",
+    "server": "bun --hot server.ts"
   },
   "dependencies": {
     "@slidev/cli": "^53.0.0",
